@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fish Rescue: Save the Cats!</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #0c1821;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+        }
+        #gameContainer {
+            position: relative;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+        }
+        canvas {
+            border-radius: 12px;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+
+<div id="gameContainer">
+    <canvas id="gameCanvas" width="500" height="600"></canvas>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+let gameState = 'START'; // START, PLAYING, GAMEOVER
+let score = 0;
+let highScore = 0;
+let frameCount = 0;
+
+// Input handling
+const keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false, w: false, s: false, a: false, d: false };
+
+// Player: The Hero Fish (Smooth, Cushioned Physics + Power-up Abilities)
+const fishPlayer = {
+    x: 250,
+    y: 450,
+    vx: 0,
+    vy: 0,
+    radius: 18,
+    speed: 0.38,
+    friction: 0.92, // Soft, smooth underwater drifting
+
+    // Abilities Timers (in frames)
+    magnetTimer: 0,
+    invincibleTimer: 0,
+    magnetRadius: 180,
+
+    update() {
+        // Smooth cushioned acceleration
+        if (keys.ArrowUp || keys.w) this.vy -= this.speed;
+        if (keys.ArrowDown || keys.s) this.vy += this.speed;
+        if (keys.ArrowLeft || keys.a) this.vx -= this.speed;
+        if (keys.ArrowRight || keys.d) this.vx += this.speed;
+
+        // Apply friction
+        this.vx *= this.friction;
+        this.vy *= this.friction;
+
+        // Update positions
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // Keep inside canvas bounds
+        this.x = Math.max(this.radius, Math.min(canvas.width - this.radius, this.x));
+        this.y = Math.max(this.radius + 60, Math.min(canvas.height - this.radius - 20, this.y));
+
+        // Ability countdowns
+        if (this.magnetTimer > 0) this.magnetTimer--;
+        if (this.invincibleTimer > 0) this.invincibleTimer--;
+    },
+
+    draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+
+        // Draw Magnet Field Aura if Active
+        if (this.magnetTimer > 0) {
+            ctx.strokeStyle = `rgba(235, 77, 75, ${0.3 + Math.sin(frameCount * 0.2) * 0.15})`;
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(0, 0, this.magnetRadius, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.fillStyle = 'rgba(235, 77, 75, 0.05)';
+            ctx.fill();
+        }
+
+        // Draw Invincibility Bubble Shield if Active
+        if (this.invincibleTimer > 0) {
+            ctx.strokeStyle = `rgba(0, 210, 211, ${0.8 + Math.sin(frameCount * 0.3) * 0.2})`;
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.arc(0, 0, this.radius + 12, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.fillStyle = 'rgba(0, 210, 211, 0.2)';
+            ctx.fill();
+        }
+
+        let angle = Math.atan2(this.vy, this.vx);
+        if (Math.abs(this.vx) < 0.1 && Math.abs(this.vy) < 0.1) angle = -Math.PI / 2;
+        ctx.rotate(angle);
+
+        // Fish Body (Pink Hero Fish)
+        ctx.fillStyle = this.invincibleTimer > 0 ? '#00d2d3' : '#ff7675';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, this.radius + 4, this.radius - 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Fish Tail
+        ctx.beginPath();
+        ctx.moveTo(-this.radius, 0);
+        ctx.lineTo(-this.radius - 10, -8);
+        ctx.lineTo(-this.radius - 10, 8);
+        ctx.closePath();
+        ctx.fill();
+
+        // Eye
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(8, -4, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#000000';
+        ctx.beginPath();
+        ctx.arc(9, -4, 2, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+    },
+
+    reset() {
+        this.x = 250;
+        this.y = 450;
+        this.vx = 0;
+        this.vy = 0;
+        this.magnetTimer = 0;
+        this.invincibleTimer = 0;
+    }
+};
+
+// Target: Floating Cats in Cushion Rings
+let rescuedCats = [];
+class FloatingCat {
+    constructor() {
+        this.x = Math.random() * (canvas.width - 80) + 40;
+        this.y = -30;
+        this.vy = 0.8 + Math.random() * 0.4;
+        this.radius = 20;
+        this.wobble = Math.random() * Math.PI * 2;
+    }
+
+    update() {
+        // Magnet Pull Effect
+        if (fishPlayer.magnetTimer > 0) {
+            let dist = Math.hypot(fishPlayer.x - this.x, fishPlayer.y - this.y);
+            if (dist < fishPlayer.magnetRadius) {
+                let angle = Math.atan2(fishPlayer.y - this.y, fishPlayer.x - this.x);
+                this.x += Math.cos(angle) * 3.5;
+                this.y += Math.sin(angle) * 3.5;
+            } else {
+                this.y += this.vy;
+                this.wobble += 0.03;
+                this.x += Math.sin(this.wobble) * 0.5;
+            }
+        } else {
+            this.y += this.vy;
+            this.wobble += 0.03;
+            this.x += Math.sin(this.wobble) * 0.5;
+        }
+    }
+
+    draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+
+        // Cushion Life Buoy
+        ctx.fillStyle = '#ff7675';
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius + 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Cat Inside Cushion
+        ctx.fillStyle = '#e67e22';
+        ctx.beginPath();
+        ctx.arc(0, 2, 10, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Cat Ears
+        ctx.beginPath();
+        ctx.moveTo(-8, -6); ctx.lineTo(-4, -14); ctx.lineTo(0, -6);
+        ctx.moveTo(0, -6); ctx.lineTo(4, -14); ctx.lineTo(8, -6);
+        ctx.fill();
+
+        // Cat Eyes
+        ctx.fillStyle = '#2c3e50';
+        ctx.beginPath();
+        ctx.arc(-3, 0, 1.5, 0, Math.PI * 2);
+        ctx.arc(3, 0, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+    }
+}
+
+// Power-Ups Class (Magnet & Invincibility Icons)
+let powerUps = [];
+class PowerUp {
+    constructor() {
+        this.type = Math.random() > 0.5 ? 'magnet' : 'shield';
+        this.x = Math.random() * (canvas.width - 80) + 40;
+        this.y = -30;
+        this.vy = 0.9;
+        this.radius = 16;
+        this.wobble = Math.random() * Math.PI * 2;
+    }
+
+    update() {
+        this.y += this.vy;
+        this.wobble += 0.04;
+        this.x += Math.sin(this.wobble) * 0.6;
+    }
+
+    draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+
+        // Floating Bubble Ring
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius + 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (this.type === 'magnet') {
+            // Magnet Icon (Red/Blue U-Shape)
+            ctx.fillStyle = '#e74c3c';
+            ctx.beginPath();
+            ctx.arc(0, 0, 10, Math.PI, 0);
+            ctx.fillRect(-10, 0, 6, 8);
+            ctx.fillRect(4, 0, 6, 8);
+            ctx.fill();
+
+            ctx.fillStyle = '#3498db';
+            ctx.fillRect(-10, 4, 6, 4);
+            ctx.fillRect(4, 4, 6, 4);
+        } else {
+            // Invincibility Shield Icon (Cyan Star/Shield)
+            ctx.fillStyle = '#00d2d3';
+            ctx.beginPath();
+            ctx.moveTo(0, -10);
+            ctx.lineTo(8, -4);
+            ctx.lineTo(6, 8);
+            ctx.lineTo(0, 12);
+            ctx.lineTo(-6, 8);
+            ctx.lineTo(-8, -4);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        ctx.restore();
+    }
+}
+
+// Hazards (Jellyfish & Sharks)
+let hazards = [];
+class Hazard {
+    constructor() {
+        this.type = Math.random() > 0.4 ? 'jellyfish' : 'shark';
+        this.radius = this.type === 'jellyfish' ? 16 : 24;
+        
+        if (this.type === 'jellyfish') {
+            this.x = Math.random() * (canvas.width - 60) + 30;
+            this.y = canvas.height + 30;
+            this.vy = -(0.6 + Math.random() * 0.4);
+            this.vx = Math.sin(this.y * 0.05) * 0.5;
+        } else {
+            this.x = Math.random() > 0.5 ? -40 : canvas.width + 40;
+            this.y = Math.random() * (canvas.height - 220) + 100;
+            this.vx = this.x < 0 ? (1.0 + Math.random() * 0.5) : -(1.0 + Math.random() * 0.5);
+            this.vy = 0;
+        }
+    }
+
+    update() {
+        this.x += this.vx;
+        this.y += this.vy;
+    }
+
+    draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+
+        if (this.type === 'jellyfish') {
+            ctx.fillStyle = 'rgba(155, 89, 182, 0.8)';
+            ctx.beginPath();
+            ctx.arc(0, 0, this.radius, Math.PI, 0);
+            ctx.fill();
+
+            ctx.strokeStyle = 'rgba(155, 89, 182, 0.6)';
+            ctx.lineWidth = 2;
+            for (let i = -10; i <= 10; i += 5) {
+                ctx.beginPath();
+                ctx.moveTo(i, 0);
+                ctx.lineTo(i + Math.sin(frameCount * 0.1 + i) * 4, 15);
+                ctx.stroke();
+            }
+        } else {
+            ctx.fillStyle = '#7f8c8d';
+            let dir = this.vx > 0 ? 1 : -1;
+            ctx.scale(dir, 1);
+
+            ctx.beginPath();
+            ctx.ellipse(0, 0, this.radius + 6, this.radius - 8, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.moveTo(-4, -8); ctx.lineTo(2, -18); ctx.lineTo(8, -8);
+            ctx.fill();
+        }
+
+        ctx.restore();
+    }
+}
+
+// Background Waves
+function drawOceanBackground() {
+    let gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    gradient.addColorStop(0, '#006266');
+    gradient.addColorStop(0.5, '#079992');
+    gradient.addColorStop(1, '#0a3d62');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
+    ctx.beginPath();
+    ctx.moveTo(100, 0); ctx.lineTo(180, 0); ctx.lineTo(260, canvas.height); ctx.lineTo(120, canvas.height);
+    ctx.moveTo(300, 0); ctx.lineTo(380, 0); ctx.lineTo(480, canvas.height); ctx.lineTo(360, canvas.height);
+    ctx.fill();
+}
+
+function spawnEntities() {
+    // Spawn Cats
+    if (frameCount % 130 === 0) {
+        rescuedCats.push(new FloatingCat());
+    }
+
+    // Spawn Power-Ups (Every ~10 seconds)
+    if (frameCount % 500 === 0) {
+        powerUps.push(new PowerUp());
+    }
+
+    // Spawn Sea Hazards
+    if (frameCount % 95 === 0) {
+        hazards.push(new Hazard());
+    }
+}
+
+function checkCollisions() {
+    // Collect Cats
+    for (let i = rescuedCats.length - 1; i >= 0; i--) {
+        let catObj = rescuedCats[i];
+        let dist = Math.hypot(fishPlayer.x - catObj.x, fishPlayer.y - catObj.y);
+        if (dist < fishPlayer.radius + catObj.radius) {
+            rescuedCats.splice(i, 1);
+            score += 1;
+        } else if (catObj.y > canvas.height + 40) {
+            rescuedCats.splice(i, 1);
+        }
+    }
+
+    // Collect Power-Ups
+    for (let i = powerUps.length - 1; i >= 0; i--) {
+        let p = powerUps[i];
+        let dist = Math.hypot(fishPlayer.x - p.x, fishPlayer.y - p.y);
+        if (dist < fishPlayer.radius + p.radius) {
+            if (p.type === 'magnet') {
+                fishPlayer.magnetTimer = 360; // 6 seconds duration
+            } else if (p.type === 'shield') {
+                fishPlayer.invincibleTimer = 300; // 5 seconds duration
+            }
+            powerUps.splice(i, 1);
+        } else if (p.y > canvas.height + 40) {
+            powerUps.splice(i, 1);
+        }
+    }
+
+    // Hit Hazards
+    for (let i = hazards.length - 1; i >= 0; i--) {
+        let hazard = hazards[i];
+        let dist = Math.hypot(fishPlayer.x - hazard.x, fishPlayer.y - hazard.y);
+        if (dist < fishPlayer.radius + hazard.radius - 4) {
+            if (fishPlayer.invincibleTimer > 0) {
+                // Destroy hazard safely when invincible
+                hazards.splice(i, 1);
+            } else {
+                gameOver();
+            }
+        }
+    }
+}
+
+function gameOver() {
+    gameState = 'GAMEOVER';
+    if (score > highScore) highScore = score;
+}
+
+function resetGame() {
+    score = 0;
+    frameCount = 0;
+    rescuedCats = [];
+    powerUps = [];
+    hazards = [];
+    fishPlayer.reset();
+    gameState = 'PLAYING';
+}
+
+function drawUI() {
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+
+    if (gameState === 'START') {
+        ctx.font = 'bold 26px Arial';
+        ctx.fillText('RESCUE THE CATS!', canvas.width / 2, 180);
+        ctx.font = '16px Arial';
+        ctx.fillText('You are the Fish! Swim to save floating cats.', canvas.width / 2, 230);
+        ctx.fillText('Use Arrow Keys / WASD or Touch/Mouse to move', canvas.width / 2, 260);
+        
+        ctx.fillStyle = '#e74c3c';
+        ctx.fillText('🧲 Magnet: Pulls nearby cats automatically', canvas.width / 2, 300);
+        ctx.fillStyle = '#00d2d3';
+        ctx.fillText('🛡️ Shield: Grants temporary invincibility', canvas.width / 2, 330);
+
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText('Click / Press Space to Start', canvas.width / 2, 390);
+    } else if (gameState === 'PLAYING') {
+        ctx.font = 'bold 22px Arial';
+        ctx.fillText(`Cats Rescued: ${score}`, canvas.width / 2, 40);
+
+        // Power-up HUD status bars
+        let hudY = 60;
+        if (fishPlayer.magnetTimer > 0) {
+            ctx.fillStyle = '#e74c3c';
+            ctx.font = 'bold 14px Arial';
+            ctx.fillText(`🧲 MAGNET ACTIVE (${Math.ceil(fishPlayer.magnetTimer / 60)}s)`, canvas.width / 2, hudY);
+            hudY += 20;
+        }
+        if (fishPlayer.invincibleTimer > 0) {
+            ctx.fillStyle = '#00d2d3';
+            ctx.font = 'bold 14px Arial';
+            ctx.fillText(`🛡️ SHIELD ACTIVE (${Math.ceil(fishPlayer.invincibleTimer / 60)}s)`, canvas.width / 2, hudY);
+        }
+    } else if (gameState === 'GAMEOVER') {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 30px Arial';
+        ctx.fillText('MISSION FAILED', canvas.width / 2, 220);
+
+        ctx.font = '20px Arial';
+        ctx.fillText(`Cats Saved: ${score}`, canvas.width / 2, 270);
+        ctx.fillText(`High Score: ${highScore}`, canvas.width / 2, 305);
+
+        ctx.font = '16px Arial';
+        ctx.fillText('Click / Press Space to Try Again', canvas.width / 2, 360);
+    }
+}
+
+function gameLoop() {
+    drawOceanBackground();
+
+    if (gameState === 'PLAYING') {
+        frameCount++;
+        fishPlayer.update();
+        spawnEntities();
+
+        // Update and draw Cats
+        for (let i = rescuedCats.length - 1; i >= 0; i--) {
+            rescuedCats[i].update();
+            rescuedCats[i].draw();
+        }
+
+        // Update and draw Power-Ups
+        for (let i = powerUps.length - 1; i >= 0; i--) {
+            powerUps[i].update();
+            powerUps[i].draw();
+        }
+
+        // Update and draw Hazards
+        for (let i = hazards.length - 1; i >= 0; i--) {
+            hazards[i].update();
+            hazards[i].draw();
+
+            if (hazards[i].y < -50 || hazards[i].x < -60 || hazards[i].x > canvas.width + 60) {
+                hazards.splice(i, 1);
+            }
+        }
+
+        checkCollisions();
+    }
+
+    fishPlayer.draw();
+    drawUI();
+
+    requestAnimationFrame(gameLoop);
+}
+
+// Key Controls
+window.addEventListener('keydown', (e) => {
+    if (e.key in keys) keys[e.key] = true;
+    if (e.code === 'Space') {
+        if (gameState !== 'PLAYING') resetGame();
+    }
+});
+
+window.addEventListener('keyup', (e) => {
+    if (e.key in keys) keys[e.key] = false;
+});
+
+// Touch / Mouse Pointer Control
+canvas.addEventListener('mousemove', (e) => {
+    if (gameState === 'PLAYING') {
+        let rect = canvas.getBoundingClientRect();
+        let targetX = e.clientX - rect.left;
+        let targetY = e.clientY - rect.top;
+
+        fishPlayer.vx += (targetX - fishPlayer.x) * 0.03;
+        fishPlayer.vy += (targetY - fishPlayer.y) * 0.03;
+    }
+});
+
+canvas.addEventListener('click', () => {
+    if (gameState !== 'PLAYING') resetGame();
+});
+
+// Start loop
+gameLoop();
+</script>
+
+</body>
+</html>
